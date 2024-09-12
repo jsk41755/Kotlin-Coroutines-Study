@@ -56,23 +56,23 @@ class MainActivity : ComponentActivity() {
          */
 
         // [Medium] Assignment #2
-        lifecycleScope.launch {
+        /*lifecycleScope.launch {
             withTimeout(10_000) {
                 val cooBird = launch {
                     while (isActive) {
-                        delay(1_000)
+                        delay(1000L)
                         println("Coo")
                     }
                 }
                 val cawBird = launch {
                     while (isActive) {
-                        delay(2_000)
+                        delay(2000L)
                         println("Caw")
                     }
                 }
                 val chipBird = launch {
                     while (isActive) {
-                        delay(3_000)
+                        delay(3000L)
                         println("Chirp")
                     }
                 }
@@ -80,7 +80,7 @@ class MainActivity : ComponentActivity() {
                 val countJob = launch {
                     var count = 10
                     while (count > 0) {
-                        delay(1_000)
+                        delay(1000L)
                         count--
                         println("countjob isActive: $isActive")
                     }
@@ -91,16 +91,11 @@ class MainActivity : ComponentActivity() {
                 cancel()
             }
             println("All coroutines cancelled after 10 seconds")
-        }
+        }*/
 
         setContent {
             Coroutine_BasicsTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Greeting(
-                        name = "Android",
-                        modifier = Modifier.padding(innerPadding)
-                    )
-                }
+                SoundScreen(modifier = Modifier)
             }
         }
     }
