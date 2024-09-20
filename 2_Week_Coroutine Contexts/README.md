@@ -12,11 +12,11 @@
 
 예를 들어, 코루틴의 작업을 Job을 통해 접근할 수 있으며, 이름을 부여하거나 예외 처리기를 추가하는 것도 가능하다.
 
-1. Dispatcher는 코루틴이 실행되는 스레드를 결정하는데 사용된다.
+3. Dispatcher는 코루틴이 실행되는 스레드를 결정하는데 사용된다.
 
 기본 디스패처는 _Dispatchers.Default_이며, _Dispatchers.Main_ 등으로 스레드를 지정할 수 있다.
 
-1. Coroutine Context는 여러 요소를 조합할 수 있다. _+_ 연산자를 사용해 디스패처와 작업을 함꼐 설정하는 방식으로 컨텍스트를 구성할 수 있다.
+4. Coroutine Context는 여러 요소를 조합할 수 있다. _+_ 연산자를 사용해 디스패처와 작업을 함꼐 설정하는 방식으로 컨텍스트를 구성할 수 있다.
 
 ```kotlin
 CoroutineScope(Dispathcers.Main + CoroutineName("Cool Coroutine!")).launch {
@@ -25,7 +25,7 @@ CoroutineScope(Dispathcers.Main + CoroutineName("Cool Coroutine!")).launch {
 }
 ```
 
-1. **코루틴 스코프**는 단순히 코루틴 컨텍스트를 감싸는 래퍼로, 코루틴의 수명 주기를 관리하는 역할을 합니다.
+5. **코루틴 스코프**는 단순히 코루틴 컨텍스트를 감싸는 래퍼로, 코루틴의 수명 주기를 관리하는 역할을 합니다.
 
 ### WithContext
 
