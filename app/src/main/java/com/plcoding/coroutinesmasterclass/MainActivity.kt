@@ -11,6 +11,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
+import com.plcoding.coroutinesmasterclass.coroutine_cancellation.homework.AssignmentOneScreen
 import com.plcoding.coroutinesmasterclass.sections.coroutine_basics.fetchData
 import com.plcoding.coroutinesmasterclass.ui.theme.CoroutinesMasterclassTheme
 import com.plcoding.coroutinesmasterclass.util.RotatingBoxScreen
@@ -24,11 +25,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-
-        
         setContent {
             CoroutinesMasterclassTheme {
-                RotatingBoxScreen()
+                AssignmentOneScreen()
             }
         }
     }
