@@ -351,3 +351,168 @@ public val Lifecycle.coroutineScope: LifecycleCoroutineScope
 
 </div>
 </details>
+
+<details>
+<summary> Coroutine Error Handling</summary>
+<div markdown="1">
+
+# Coroutine Error Handling
+
+## How Coroutine Treat Exceptions
+
+### 1. **예외 발생 시 동작**
+
+- 코루틴 내에서 예외가 발생하면, 해당 예외는 **부모 코루틴**으로 전파됩니다. 예외가 처리되지 않으면 **애플리케이션이 충돌**하게 됩니다.
+- 예외가 발생한 코루틴은 **즉시 중단**되며, 부모 코루틴이 해당 예외를 처리하지 않으면 부모 코루틴도 중단됩니다.
+
+### 2. **예외 처리 방법**
+
+- 예외를 처리하는 방법으로는 **`try-catch`** 블록을 사용하여 예외를 포착할 수 있습니다. 만약 자식 코루틴에서 발생한 예외를 처리하면, 부모 코루틴으로 전파되지 않고 안전하게 처리됩니다.
+
+```kotlin
+launch {
+    try {
+        delay(1000)
+        throw Exception("오류 발생")
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+}
+```
+
+- 위 코드에서 자식 코루틴 내의 예외를 처리하면 부모 코루틴에 영향을 주지 않고 정상적으로 작업을 마칠 수 있습니다.
+
+### 3. **부적절한 예외 처리**
+
+- `try-catch`를 **`launch`** 함수 바깥에 사용하면 예외를 포착할 수 없습니다. 이는 `launch` 함수가 비동기로 실행되며, 호출 직후 바로 종료되기 때문에 **`try-catch`** 블록에서 예외를 잡을 수 없기 때문입니다.
+
+```kotlin
+try {
+    launch {
+        throw Exception("오류 발생")
+    }
+} catch (e: Exception) {
+    println("예외 처리됨")
+}
+```
+
+- 이 경우, 예외는 부모 코루틴으로 전파되며 애플리케이션이 충돌합니다.
+
+### 4. **코루틴 예외 처리의 기본 원칙**
+
+- **자식 코루틴**에서 발생한 예외는 **부모 코루틴으로 전파**되므로, 자식 코루틴 내에서 발생할 수 있는 예외를 **명시적으로 처리**하는 것이 좋습니다.
+- 예를 들어, API 호출과 같은 중단 함수에서 발생할 수 있는 예외를 `try-catch`로 처리하여 부모 코루틴이 중단되지 않도록 해야 합니다.
+
+## Catching Errors With CoroutineExceptionHandler
+
+### 1. **`CoroutineExceptionHandler`의 개념**
+
+- `CoroutineExceptionHandler`는 코루틴에서 발생한 **미처리된 예외**를 처리하는 **콜백**을 제공합니다.
+- **코루틴 컨텍스트**의 일부로서, 예외가 발생했을 때 해당 예외를 처리할 수 있는 방법을 제공하며, 앱이 충돌하지 않도록 도와줍니다.
+
+### 2. **사용 예시**
+
+- **`try-catch`** 블록을 사용하지 않고 예외가 발생했을 때, 예외는 부모 코루틴으로 전파되며, 부모 코루틴이 취소됩니다.
+- `CoroutineExceptionHandler`를 사용하면 **예외가 부모 코루틴으로 전파되기 전에 처리**할 수 있다.
+
+```kotlin
+val handler = CoroutineExceptionHandler { _, throwable ->
+    throwable.printStackTrace()  // 예외 처리
+}
+
+launch(handler) {
+    throw Exception("예외 발생")
+}
+```
+
+### 3. **`CoroutineExceptionHandler`의 한계**
+
+- **예외가 처리되더라도** 해당 코루틴은 **실패한 것으로 간주**됩니다. 즉, 예외가 발생한 자식 코루틴이 속한 **부모 코루틴** 및 해당 부모 코루틴 내의 **모든 자식 코루틴**도 취소됩니다.
+- 예를 들어, 자식 코루틴에서 예외가 발생하면 부모 코루틴이 취소되고, 부모의 다른 자식 코루틴도 함께 취소됩니다.
+
+### 4. **사용 시 주의사항**
+
+- `CoroutineExceptionHandler`는 **글로벌 예외 처리** 또는 **로그 기록**을 위한 용도로 적합하지만, 일반적인 예외 처리를 위해 사용하는 것은 권장되지 않습니다.
+- 예외 처리를 위해서는 **`try-catch` 블록**을 사용하는 것이 더 권장됩니다. 이는 각 코루틴 내에서 예외를 명시적으로 처리함으로써 부모 코루틴이 취소되는 것을 방지할 수 있기 때문입니다.
+
+## SupervisorJob
+
+### 1. **기본 코루틴 예외 처리**
+
+- 기본적으로 코루틴에서 예외가 발생하면, **해당 코루틴 스코프 전체가 취소**됩니다. 예를 들어, 한 자식 코루틴에서 예외가 발생하면 같은 스코프 내의 다른 자식 코루틴도 함께 취소됩니다.
+
+### 2. **`SupervisorJob`의 역할**
+
+- `SupervisorJob`은 **각 자식 코루틴이 독립적으로 실행**되도록 하여, 한 자식 코루틴에서 예외가 발생해도 **다른 자식 코루틴에 영향을 주지 않도록** 합니다.
+- `SupervisorJob`을 사용하면, 한 코루틴이 실패해도 나머지 코루틴은 계속해서 정상적으로 실행될 수 있습니다.
+
+```kotlin
+val supervisorScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+
+supervisorScope.launch {
+    throw Exception("코루틴 1 오류 발생")
+}
+
+supervisorScope.launch {
+    println("코루틴 2 실행 중")
+}
+```
+
+위 코드에서 첫 번째 코루틴에서 예외가 발생하더라도, 두 번째 코루틴은 정상적으로 실행됩니다.
+
+### 4. **안드로이드에서의 `SupervisorJob` 사용**
+
+- **안드로이드의 `LifecycleScope`** 및 `ViewModelScope`는 기본적으로 `SupervisorJob`을 사용합니다. 이는 여러 독립적인 작업(예: 애니메이션, API 호출, 데이터베이스 쿼리 등)이 하나의 스코프 내에서 실행될 때, **하나의 작업이 실패해도 다른 작업에 영향을 주지 않도록** 하기 위함입니다.
+
+### 5. **사용 시 주의사항**
+
+- `launch` 또는 `withContext`와 함께 `SupervisorJob`을 직접 사용하는 것은 권장되지 않습니다. 이는 부모-자식 간의 구조적 동시성 관계가 깨질 수 있기 때문입니다. 대신, **사용자 정의 코루틴 스코프**에서만 `SupervisorJob`을 사용하는 것이 좋습니다.
+
+## coroutineScope & supervisorScope
+
+### 1. **`coroutineScope`**
+
+- `coroutineScope`는 **모든 자식 코루틴이 완료될 때까지 기다리는 스코프**입니다.
+- **구조적 동시성**을 보장하기 때문에, 자식 코루틴 중 하나에서 예외가 발생하면 **모든 자식 코루틴이 취소**됩니다. 즉, 한 코루틴이 실패하면 다른 자식 코루틴도 모두 취소됩니다.
+- 이 방식은 **모든 작업이 성공해야 하는 경우**에 적합합니다. 예를 들어, 두 개의 API 호출이 상호 의존적일 때, 하나가 실패하면 다른 것도 취소되는 것이 바람직합니다.
+
+### 2. **`supervisorScope`**
+
+- `supervisorScope`는 **자식 코루틴이 독립적으로 동작**할 수 있게 하며, 한 자식 코루틴이 실패해도 다른 자식 코루틴에 영향을 주지 않습니다.
+- 이는 여러 작업이 **서로 독립적**일 때 유용합니다. 예를 들어, 10개의 이미지를 압축하는 작업에서 하나의 이미지 압축이 실패해도 나머지 9개는 계속해서 압축 작업을 완료할 수 있습니다.
+
+```kotlin
+supervisorScope {
+    launch {
+        compressImage()  // 예외 발생 시 다른 코루틴에 영향 없음
+    }
+    launch {
+        saveImage()  // 독립적으로 실행됨
+    }
+}
+```
+
+### 3. **사용 사례 비교**
+
+- `coroutineScope`는 **모든 작업이 성공적으로 완료되어야 할 때** 사용됩니다. 예를 들어, 프로필 데이터를 가져올 때 두 개의 API 호출이 모두 성공해야 한다면, 하나의 호출이 실패하면 다른 호출도 취소되는 것이 이상적입니다.
+
+```kotlin
+coroutineScope {
+    val metadata = async { getProfileMetadata() }
+    val posts = async { getProfilePosts() }
+    
+    if (metadata.await() != null && posts.await() != null) {
+        // 성공 시 처리
+    }
+}
+```
+
+- `supervisorScope`는 **각 작업이 독립적**이고, 하나의 실패가 다른 작업에 영향을 주지 않아야 할 때 사용됩니다. 예를 들어, 여러 이미지를 압축하는 경우 한 이미지의 압축이 실패해도 다른 이미지들이 계속 압축되어야 할 때 적합합니다.
+
+### 4. **`launch`와 `async`의 차이**
+
+- `launch`는 **결과를 반환하지 않는** 코루틴을 생성하며, 예외가 발생하면 즉시 부모 코루틴으로 전파됩니다.
+- `async`는 **결과를 반환하는** 코루틴을 생성하며, `await`을 호출할 때까지 예외가 발생하지 않습니다. 즉, 예외가 발생하더라도 `await()`를 호출할 때까지 예외가 전파되지 않습니다.
+
+</div>
+</details>
