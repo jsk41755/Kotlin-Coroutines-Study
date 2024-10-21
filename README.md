@@ -1301,7 +1301,7 @@ val callback = object : LocationCallback() {
 ### 1. **타이머 Flow 생성**
 
 - 타이머를 구현하기 위해 **Flow**를 생성하고, **emissions per second** 값을 받아 **초당 특정 횟수**로 값을 방출하는 구조를 만들었습니다.
-- **Flow 빌더**를 사용하여 **지속적인 루프**로 값을 방출하고, 방출 사이의 **시간 차이**를 Kotlin의 `Durati`으로 관리합니다.
+- **Flow 빌더**를 사용하여 **지속적인 루프**로 값을 방출하고, 방출 사이의 **시간 차이**를 Kotlin의 `Duration`으로 관리합니다.
 
 ### 예시 코드:
 
