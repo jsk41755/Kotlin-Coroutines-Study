@@ -1290,3 +1290,985 @@ val callback = object : LocationCallback() {
 
 </div>
 </details>
+
+
+<details>
+<summary>Flows In Practice</summary>
+<div markdown="1">
+
+## Building a Timer Flow
+
+### 1. **타이머 Flow 생성**
+
+- 타이머를 구현하기 위해 **Flow**를 생성하고, **emissions per second** 값을 받아 **초당 특정 횟수**로 값을 방출하는 구조를 만들었습니다.
+- **Flow 빌더**를 사용하여 **지속적인 루프**로 값을 방출하고, 방출 사이의 **시간 차이**를 Kotlin의 `Durati`으로 관리합니다.
+
+### 예시 코드:
+
+```kotlin
+fun timerFlow(emissionsPerSecond: Int): Flow<Duration> = flow {
+    var lastEmitTime = System.currentTimeMillis()
+    emit(Duration.ZERO)  // 첫 번째 방출은 0으로 시작
+    while (true) {
+        delay((1000L / emissionsPerSecond).roundToLong())
+        val currentTime = System.currentTimeMillis()
+        val elapsedTime = currentTime - lastEmitTime
+        emit(elapsedTime.milliseconds)
+        lastEmitTime = currentTime
+    }
+}
+
+```
+
+- 지연(delay)을 통해 **지정된 초당 방출 횟수**로 값을 방출하며, 각 방출 사이의 **경과 시간**을 계산하여 **밀리초** 단위로 값을 방출합니다.
+
+### 2. **실시간 타이머 구현**
+
+- 타이머 Flow를 활용하여 **실시간 경과 시간**을 표시하는 **스톱워치**를 구현합니다.
+- **`reduce` 연산자**를 사용하여 방출된 시간 차이를 **누적 합산**하여 **전체 경과 시간**을 계산합니다.
+- **`map` 연산자**를 통해 경과 시간을 **시/분/초 형식의 문자열로 변환**하여 UI에 표시합니다.
+
+### 예시 코드:
+
+```kotlin
+ val elapsedTimeFlow = timerFlow(10)
+    .runningReduce { totalElapsedTime, newElapsedTime ->
+        totalElapsedTime + newElapsedTime
+    }
+    .map { totalElapsedTime ->
+	    totalElapsedTime.toComponents { hours, miniutes, seconds, nanoseconds ->
+	        String.format(
+	            "%02d:%02d:%02d",
+	            hours,
+	            miniutes,
+	            seconds,
+	            nanoseconds / (1_000_000L * 10L)
+	        )
+        }
+    }
+    .stateIn(
+	    viewModelScope,
+		  SharingStarted.WhileSubScribed(5000L),
+		  "00:00:00:00"
+		 )
+
+```
+
+- 이 코드를 통해 **경과 시간**을 누적하고, **시/분/초 형식**으로 변환하여 **UI에 표시**합니다.
+
+### 3. **Flow 상태 관리**
+
+- **StateFlow**로 변환하여 UI에서 **경과 시간**을 수집하고, **화면 회전과 같은 구성 변경**에도 타이머 상태를 유지합니다.
+- *`sharingStarted = WhileSubscribed(5_000)`*를 설정하여, 구성 변경 시 **5초 동안 Flow를 유지**하고, 새로운 수집자가 생기면 Flow가 다시 중단 없이 이어집니다.
+
+### 4. **진행률 표시**
+
+- **진행률**을 표시하는 **Progress Bar**를 Flow로 구현합니다.
+- **총 시간 대비 경과 시간**의 비율을 계산하여 **LinearProgressIndicator**로 UI에 표시합니다.
+
+### 예시 코드:
+
+```kotlin
+val progress = timerFlow(100)
+    .runningReduce { totalElapsedTime, newElapsedTime ->
+        totalElapsedTime + newElapsedTime
+    }
+    .map { totalElapsedTime ->
+        val totalMillis = totalElapsedTime.inWholeMilliseconds
+        (totalMillis / 5_000f).coerceIn(0f, 1f)
+    }
+    .filter { progressFraction ->
+		    progressFraction in (0f .. 1f)
+		 }
+		 .stateIn(
+			 viewModelScope,
+			 SharingStarted.WhileSubscribed(5000L),
+			 0f
+			)
+	}
+```
+
+```kotlin
+val progress by viewModel.progress.collectAsStateWithLifecycle()
+
+LinearProgressIndicator(
+	progress = { progress },
+	modifier = Modifier
+		.padding(16.dp)
+		.fillMaxWidth()
+)
+```
+
+## **Transforming Tracked Locations With zip() and combine()**
+
+두 연산자는 각각 **두 개의 Flow를 결합**하지만, 그 방식에서 차이가 있습니다. 특히 **실시간 위치 추적** 앱에서 **위치 데이터**와 **타이머 데이터**를 결합하여 **평균 속도**를 계산하는 방법을 중점적으로 다룹니다.
+
+### 1. **Flow 연산자: `zip`과 `combine`**
+
+- **`zip`**: 두 Flow에서 **동시에 새로운 값**이 방출될 때, 그 값을 **쌍으로 묶어** 처리합니다. 두 Flow 중 하나가 더 빠른 속도로 값을 방출하더라도, **더 느린 Flow에 맞춰서** 동작합니다.
+- **`combine`**: 두 Flow에서 **하나라도 새로운 값이 방출**되면, 그 값을 **즉시 결합**하여 처리합니다. 이는 **빈번한 값 방출**이 있는 경우, 두 Flow의 값이 항상 일치하지 않아도 처리할 수 있습니다.
+
+### 2. **위치 데이터와 타이머 데이터를 결합한 예시**
+
+- 강의에서는 **위치 데이터를 Flow**로 추적하고, **타이머 데이터를 Flow**로 함께 사용하여, 두 Flow를 결합하여 **평균 속도**를 계산하는 예시를 보여줍니다.
+- **`zip` 연산자**를 사용하면 **타이머 값**과 **위치 값**이 동시에 갱신될 때, 두 값을 쌍으로 묶어 **경과 시간에 따른 위치 변화**를 추적할 수 있습니다.
+    - 위 코드는 **위치 데이터**와 **타이머 데이터를 쌍**으로 묶어 **각 위치가 추적된 시점**을 기록합니다.
+
+```kotlin
+fun Context.locationTracking() {
+    val observer = LocationObserver(this)
+
+    timeAndEmit(3f)
+        .runningReduce { totalElapsedTime, newElapsedTime ->
+            totalElapsedTime + newElapsedTime
+        }
+        .zip(observer.observeLocation(1000L)) { totalDuration, location ->
+            totalDuration to location
+        }
+        .onEach { (totalDuration, location) ->
+            println("Location (${location.latitude}, ${location.longitude}) was tracked " +
+                    "after ${totalDuration.inWholeMilliseconds} milliseconds.")
+        }
+        .runningFold(initial = emptyList<Pair<Duration, Location>>()) { locations, newLocation ->
+            locations + newLocation
+        }
+        .map { allLocations ->
+            allLocations.zipWithNext { (duration1, location1), (duration2, location2) ->
+                val distance = location1.distanceTo(location2)
+                val durationDifference = (duration2 - duration1).toDouble(DurationUnit.HOURS)
+
+                if(durationDifference > 0.0) {
+                    ((distance / 1000.0) / durationDifference)
+                } else 0.0
+            }.average()
+        }
+        .onEach { avgSpeed ->
+            println("Average speed is $avgSpeed km/h")
+        }
+        .launchIn(GlobalScope)
+}
+```
+
+### 3. **평균 속도 계산**
+
+- 위치 데이터를 통해 **두 위치 사이의 거리**와 **경과 시간**을 계산하여 **평균 속도**를 구합니다. 이를 위해 **위치 간 거리 계산**과 **시간 차이**를 구해야 하며, **두 위치의 차이**를 계산한 후 **속도**를 계산할 수 있습니다.
+    
+    ```kotlin
+    val distance = location1.distanceTo(location2)  // 두 위치 간 거리 계산
+    val timeDifference = time2 - time1  // 시간 차이
+    val speed = distance / timeDifference  // 속도 계산
+    ```
+    
+
+### 4. **`combine` 연산자의 차이**
+
+- **`combine`** 연산자를 사용하면, **두 Flow 중 하나라도 값이 갱신**될 때마다 그 값을 즉시 결합합니다. 하지만 이 경우 **두 Flow의 값 방출 주기**가 다르면 **불필요하게 많은 결합 작업**이 발생할 수 있습니다.
+- 예를 들어, 타이머가 초당 세 번 값을 방출하고, 위치는 초당 한 번 값을 방출하면, **타이머 값이 불필요하게 많이 결합**됩니다.
+    
+    ```kotlin
+    val combinedFlow = locationFlow.combine(timerFlow) { location, time ->
+        Pair(location, time)
+    }
+    ```
+    
+    - `combine`을 사용하면 타이머가 더 자주 갱신될 때마다 **새로운 위치 없이 타이머 값만 계속 결합**되는 상황이 발생합니다.
+
+### 5. **실전 예시: 평균 속도 계산**
+
+- 사용자가 특정 경로를 이동할 때, **위치 데이터**와 **타이머 데이터**를 결합하여 **평균 속도**를 계산하는 작업을 수행합니다. `zip`을 통해 타이머와 위치를 결합하여 정확한 시점에 따른 위치 변화량을 추적할 수 있습니다.
+
+## Combining UI States
+
+**`combine`** 연산자를 사용하여 **UI 상태를 결합**하는 방법에 대해 설명합니다. 예시로 **회원가입 화면**에서 **이메일**과 **비밀번호 입력 필드**의 유효성을 실시간으로 검증하는 과정을 다루고 있습니다. 또한 **`debounce`** 연산자와 같은 추가적인 최적화 기법도 설명합니다.
+
+### 주요 내용:
+
+1. **UI 상태 결합**:
+    - **이메일**과 **비밀번호** 입력 필드의 유효성을 검사하는 **회원가입 화면**을 구성합니다.
+    - **`combine`** 연산자를 사용하여 **이메일**과 **비밀번호 상태 Flow**를 결합하고, 두 입력 값이 모두 유효할 때만 **회원가입 버튼**을 활성화합니다.
+2. **기존의 비효율적인 방법**:
+    - 강의에서는 이메일과 비밀번호가 입력될 때마다 매번 **입력 유효성을 수동으로 검사**하고 업데이트하는 방법이 비효율적이라고 설명합니다. 이는 입력 필드가 업데이트될 때마다 검증을 직접 호출해야 하기 때문입니다.
+    - 대신 `combine`을 사용하여 상태를 자동으로 추적하고 검증하는 방식을 제안합니다.
+3. **`combine`을 사용한 개선된 방식**:
+    - **`combine`** 연산자를 사용하여 **이메일 Flow**와 **비밀번호 Flow**를 결합하고, 입력 필드 중 하나라도 변경되면 자동으로 유효성 검사를 실행합니다.
+    
+    예시 코드:
+    
+    ```kotlin
+    val canRegisterFlow = combine(emailStateFlow, passwordStateFlow) { email, password ->
+        val isValidEmail = Patterns.EMAIL_ADDRESS.matcher(email).matches()
+        val isValidPassword = password.length > 9 && password.any { !it.isLetterOrDigit() }
+        isValidEmail && isValidPassword
+    }
+    
+    ```
+    
+    - 위 코드는 **이메일과 비밀번호가 모두 유효**할 때 **회원가입 버튼을 활성화**합니다. 이를 통해 두 필드 중 하나라도 변경되면 유효성 검사가 자동으로 수행됩니다.
+4. **버튼 활성화**:
+    - 결합된 Flow 결과인 **`canRegisterFlow`** 값을 **버튼의 활성화 상태**로 연결합니다.
+    - 처음 앱이 실행되었을 때는 **버튼이 비활성화** 상태로 시작하며, **유효한 이메일과 비밀번호**가 입력되면 **버튼이 활성화**됩니다.
+5. **`debounce` 연산자의 사용**:
+    - **`debounce`** 연산자는 **입력 필드가 너무 자주 변경되는 경우** 불필요한 유효성 검사를 방지하기 위해 사용됩니다. 예를 들어, 사용자가 빠르게 입력할 때 **500밀리초 동안 입력이 멈출 때까지 기다린 후** 유효성 검사를 실행합니다.
+    
+    예시 코드:
+    
+    ```kotlin
+    
+    class FormViewModel : ViewModel() {
+    
+        private val _email = MutableStateFlow("")
+        val email = _email.asStateFlow()
+    
+        private val _password = MutableStateFlow("")
+        val password = _password.asStateFlow()
+    
+        val canRegister = email
+            .debounce(500L)
+            .combine(
+                password,
+            ) { email, password ->
+                val isValidEmail = PatternsCompat.EMAIL_ADDRESS.matcher(email).matches()
+                val isValidPassword = password.any { !it.isLetterOrDigit() } &&
+                        password.length > 9
+    
+                isValidPassword && isValidEmail
+            }.stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5000L),
+                false
+            )
+    
+        fun onEmailChange(email: String) {
+            _email.value = email
+        }
+    
+        fun onPasswordChange(password: String) {
+            _password.value = password
+        }
+    }
+    ```
+    
+    - `debounce`는 주로 **API 호출 최적화**나 **서버 검색 요청**에 사용되며, **사용자가 입력을 멈춘 후** 일정 시간 동안 기다렸다가 작업을 수행하는 방식입니다. 이 강의에서는 로컬 유효성 검증이므로 `debounce`는 필요하지 않지만, 원격 서버 요청을 처리할 때 유용하다고 언급됩니다.
+6. **실시간 검증과 UX 개선**:
+    - 사용자는 **유효한 이메일**과 **비밀번호**를 입력할 때마다 즉시 **버튼의 활성화 상태가 변경**되는 것을 볼 수 있습니다. 예를 들어, 이메일 형식이 맞지 않으면 버튼이 비활성화되며, 다시 유효한 이메일 형식을 입력하면 버튼이 활성화됩니다.
+
+### 결론:
+
+- **`combine`** 연산자를 사용하여 여러 **UI 상태를 결합**하고, 각각의 상태 변화에 따라 **자동으로 검증 로직을 실행**하는 방식으로 UX를 개선할 수 있습니다.
+- 또한 **`debounce`** 연산자는 입력 필드에서 불필요하게 자주 발생하는 유효성 검사를 줄여 **API 요청 등의 성능을 최적화**하는 데 사용할 수 있습니다
+
+## Listening to a WebSocket Stram In a Flow
+
+**WebSocket**을 사용하여 **실시간 메시지 스트림**을 처리하고, 이를 **Kotlin Flow**와 결합하여 데이터를 처리하는 방법을 설명합니다. WebSocket은 클라이언트와 서버 간에 지속적인 연결을 유지하며 **양방향 통신**을 가능하게 합니다. 특히, `callbackFlow`를 사용해 서버로부터 실시간으로 데이터를 받아와 **Flow**로 처리하는 방식을 다룹니다.
+
+### 주요 내용
+
+1. **WebSocket 개요**:
+    - WebSocket은 일반적인 HTTP 요청과 달리, **지속적인 연결**을 유지하면서 **양방향 통신**을 가능하게 합니다. 서버와 클라이언트는 언제든지 메시지를 주고받을 수 있습니다.
+    - 이 강의에서는 **에코 서버**를 사용하여, 클라이언트가 서버에 보낸 메시지를 그대로 돌려주는 방식으로 WebSocket 통신을 구현합니다.
+2. **Kotlin에서 WebSocket 연결**:
+    - **Ktor** 라이브러리의 **WebSocket 플러그인**을 사용하여 WebSocket을 연결합니다. 이를 통해 서버와 연결을 맺고, **실시간으로 데이터를 주고받을 수 있는 세션**을 생성합니다.
+    - WebSocket 연결 후, **서버에서 전송된 메시지**를 실시간으로 받기 위해 **callbackFlow**를 사용합니다.
+    
+    ```kotlin
+    class WebSocketClient(
+        private val httpClient: HttpClient
+    ) {
+        private var session: WebSocketSession? = null
+    
+        suspend fun sendMessage(text: String) {
+            session?.send(text)
+        }
+    
+        fun listenToSocket(url: String): Flow<String> {
+            return callbackFlow {
+                session = httpClient.webSocketSession(
+                    urlString = url
+                )
+    
+                session?.let { session ->
+                    session
+                        .incoming
+                        .consumeAsFlow()
+                        .filterIsInstance<Frame.Text>()
+                        .collect {
+                            send(it.readText())
+                        }
+                } ?: run {
+                    session?.close()
+                    session = null
+                    close()
+                }
+    
+                awaitClose {
+                    launch(NonCancellable) {
+                        session?.close()
+                        session = null
+                    }
+                }
+            }
+        }
+    }
+    ```
+    
+    - `callbackFlow`를 사용하여 WebSocket에서 받은 메시지를 Flow로 변환하고, **실시간으로 수집**할 수 있습니다.
+    - **`send()`** 함수를 통해 서버로부터 받은 메시지를 Flow에 전달하며, **WebSocket 세션이 종료되면** 자동으로 Flow도 종료됩니다.
+3. **Flow를 사용한 메시지 처리**:
+    - WebSocket에서 받은 메시지를 `runningFold`를 사용하여 **누적된 메시지 리스트**로 변환합니다. 이를 통해, 서버로부터 받은 모든 메시지를 **리스트로 관리**하고, **UI에서 표시**할 수 있습니다.
+    
+    ```kotlin
+    data class WebSocketLog(
+        val formattedTime: String,
+        val log: String
+    )
+    
+    class WebSocketViewModel: ViewModel() {
+    
+        private val client = WebSocketClient(HttpClientFactory.create())
+    
+        val receivedLogs = client
+            .listenToSocket("wss://echo.websocket.org/")
+            .runningFold(initial = emptyList<WebSocketLog>()) { logs, newLog ->
+                val formattedTime = DateTimeFormatter
+                    .ofPattern("dd-MM-yyyy, hh:mm:ss")
+                    .format(LocalDateTime.now())
+    
+                logs + WebSocketLog(
+                    formattedTime = formattedTime,
+                    log = newLog
+                )
+            }
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5000L),
+                emptyList()
+            )
+    
+        fun sendMessage(text: String) {
+            viewModelScope.launch {
+                client.sendMessage(text)
+            }
+        }
+    }
+    ```
+    
+    - 이 코드는 **실시간 메시지**를 누적하여 **메시지 리스트**로 변환하고, 이를 **UI 상태로 관리**합니다.
+    - `runningFold`를 사용하여 새로운 메시지가 올 때마다 **기존 메시지 리스트에 추가**됩니다.
+4. **UI에서의 WebSocket 메시지 표시**:
+    - WebSocket에서 받은 메시지들을 **Jetpack Compose**를 사용해 **UI에 표시**합니다. 메시지는 **LazyColumn**을 통해 리스트로 나열되며, 새로운 메시지가 도착할 때마다 **UI가 업데이트**됩니다.
+    
+    ```kotlin
+    @OptIn(ExperimentalFoundationApi::class)
+    @Composable
+    fun WebSocketUi(
+        viewModel: WebSocketViewModel = viewModel(),
+        modifier: Modifier = Modifier
+    ) {
+        val receivedLogs by viewModel.receivedLogs.collectAsStateWithLifecycle()
+    
+        LazyColumn(
+            modifier = modifier
+                .fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            stickyHeader {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    var text by remember {
+                        mutableStateOf("")
+                    }
+                    TextField(
+                        value = text,
+                        onValueChange = { text = it },
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(onClick = {
+                        viewModel.sendMessage(text)
+                    }) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Send,
+                            contentDescription = "Send"
+                        )
+                    }
+                }
+            }
+            items(receivedLogs) { log ->
+                Text(text = "${log.formattedTime}: ${log.log}")
+            }
+        }
+    }
+    ```
+    
+    - `collectAsStateWithLifecycle()`을 사용해 **ViewModel의 Flow 상태**를 UI에서 **실시간으로 수집**하고, 화면에 메시지를 표시합니다.
+5. **메시지 전송**:
+    - 사용자가 **텍스트 필드**에 입력한 메시지를 WebSocket을 통해 서버에 전송하고, 그 응답을 받아서 다시 리스트에 추가하는 기능을 구현합니다.
+    - 버튼을 클릭하면 사용자가 입력한 메시지가 WebSocket을 통해 서버로 전송되고, **서버로부터 응답**이 오면 그 메시지가 UI에 표시됩니다.
+    
+    ```kotlin
+    fun sendMessage(message: String) {
+        viewModelScope.launch {
+            webSocketClient.sendMessage(message)
+        }
+    }
+    ```
+    
+
+### 요약
+
+- **WebSocket**을 사용해 **실시간 통신**을 구현하며, **Ktor WebSocket 플러그인**을 통해 서버와의 지속적인 연결을 유지할 수 있습니다.
+- `callbackFlow`를 사용해 **WebSocket에서 받은 메시지를 Flow로 처리**하고, 이를 **Jetpack Compose** UI와 결합하여 **실시간으로 메시지를 표시**하는 방식입니다.
+- `runningFold`를 사용하여 서버로부터 받은 메시지를 누적하고, **상태를 관리**하며, UI는 이를 실시간으로 반영합니다
+
+## **Handling Flow Errors & Retrying Failed Flows**
+
+**Kotlin Flow**에서 **오류 처리**를 다루며, 특히 **네트워크 연결** 실패와 같은 상황에서 **재시도(retry)** 및 **오류 처리** 방법을 설명합니다. 실전에서는 **WebSocket**과 같은 네트워크 연결이 항상 성공하지 않으며, **연결 실패 시 앱이 충돌하지 않도록** 대비책을 마련하는 것이 중요합니다.
+
+### 주요 내용
+
+1. **기존 WebSocket 예제의 문제점**:
+    - 이전에 작성된 WebSocket 클라이언트는 정상적인 경로만 처리했습니다(즉, 연결이 항상 성공하는 시나리오만 고려).
+    - 그러나 **현실에서는 네트워크 오류**가 발생할 수 있으며, 예를 들어 **인터넷 연결이 끊어지거나** 서버를 찾을 수 없는 경우 앱이 **충돌**할 수 있습니다.
+2. **오류 처리 방법**:
+    - WebSocket 연결 실패 시 `UnresolvedAddressException`과 같은 예외가 발생할 수 있습니다.
+    - 이러한 예외를 처리하지 않으면 앱이 **충돌**합니다. 예를 들어, **비행기 모드**에서 앱을 다시 시작하면 연결이 실패하고 앱이 충돌할 수 있습니다.
+    - **`catch` 연산자**를 사용하여 Flow 내에서 발생한 예외를 **포착**하고, 이를 처리하는 방법을 설명합니다.
+    
+    ```kotlin
+    listenToSocket()
+        .catch { cause ->
+            if (cause is UnresolvedAddressException) {
+                println("Oops, no Internet!")
+            }
+        }
+        .collect { message ->
+            println("Received: $message")
+        }
+    ```
+    
+    - 이 코드를 통해 **인터넷 연결이 없을 때** 발생하는 예외를 잡아내고, 사용자에게 "인터넷이 끊겼다"는 메시지를 출력할 수 있습니다.
+3. **재시도 로직 추가**:
+    - 네트워크 문제는 **일시적인 문제**일 수 있기 때문에, **연결 실패 시 재시도**하는 것이 유용할 수 있습니다.
+    - **`retry` 연산자**를 사용하여 **실패한 Flow**를 다시 시도할 수 있으며, 예외가 발생할 때마다 재시도를 수행할 수 있습니다.
+    
+    ```kotlin
+    listenToSocket()
+        .retry { cause ->
+            cause is UnresolvedAddressException
+        }
+        .catch { cause ->
+            println("No Internet after retrying.")
+        }
+        .collect { message ->
+            println("Received: $message")
+        }
+    ```
+    
+    - **`retry` 블록**에서 **예외를 검사**하고, 예외가 특정 조건을 만족할 때 재시도합니다. 이 예에서는 **인터넷 연결 오류**가 발생했을 때만 재시도합니다.
+4. **재시도 횟수 제한**:
+    - 무한정 재시도하는 것은 좋지 않기 때문에, **재시도 횟수를 제한**하는 방법을 설명합니다.
+    - **`retryWhen`** 연산자를 사용하면 **재시도 횟수**를 제어할 수 있으며, **특정 횟수 이상 실패**하면 재시도를 중단할 수 있습니다.
+    
+    ```kotlin
+    listenToSocket()
+        .retryWhen { cause, attempt ->
+            cause is UnresolvedAddressException && attempt < 3
+        }
+        .catch { cause ->
+            println("No Internet after 3 retries.")
+        }
+        .collect { message ->
+            println("Received: $message")
+        }
+    ```
+    
+    - 이 코드는 **세 번까지 재시도**하며, 세 번 실패한 후에는 재시도를 멈추고 오류를 처리합니다.
+5. **지연된 재시도 (Delay between retries)**:
+    - 재시도 간의 **지연 시간**을 설정할 수 있습니다. 예를 들어, 각 재시도 사이에 **5초 간격**을 두고 다시 시도할 수 있습니다.
+    - *`delay`*를 이용해 재시도 간격을 설정하여, 서버에 과부하를 주지 않도록 할 수 있습니다.
+    
+    ```kotlin
+    listenToSocket()
+        .retryWhen { cause, attempt ->
+            if (cause is UnresolvedAddressException && attempt < 3) {
+                delay(5000)  // 5초 기다림
+                true
+            } else {
+                false
+            }
+        }
+        .catch { cause ->
+            println("No Internet after retries.")
+        }
+        .collect { message ->
+            println("Received: $message")
+        }
+    ```
+    
+6. **지수적 백오프 (Exponential Backoff)**:
+    - **지수적 백오프**는 각 재시도마다 대기 시간을 **두 배로 늘리는 방법**입니다. 이는 연결 실패 시 너무 빈번하게 재시도하는 것을 방지하고, **네트워크 복구 가능성**을 고려한 전략입니다.
+    
+    ```kotlin
+    retryWhen { cause, attempt ->
+        if (cause is UnresolvedAddressException && attempt < 3) {
+            val delayTime = (2.0.pow(attempt) * 1000).toLong()  // 2^attempt 초 만큼 대기
+            delay(delayTime)
+            true
+        } else {
+            false
+        }
+    }
+    ```
+    
+    - 첫 번째 재시도는 1초 후, 두 번째는 2초 후, 세 번째는 4초 후에 재시도를 시도하며 **대기 시간이 점점 길어집니다**.
+
+### 전체 코드
+
+```kotlin
+class WebSocketViewModel: ViewModel() {
+
+    private val client = WebSocketClient(HttpClientFactory.create())
+
+    val receivedLogs = client
+        .listenToSocket("wss://echo.websocket.org/")
+        .retryWhen { cause, attempt ->
+            delay(2f.pow(attempt.toInt()).roundToInt() * 2000L)
+            cause is UnresolvedAddressException && attempt < 4
+        }
+        .catch { cause ->
+            when(cause) {
+                is UnresolvedAddressException -> {
+                    println("Oops, no internet!")
+                }
+            }
+        }
+        .runningFold(initial = emptyList<WebSocketLog>()) { logs, newLog ->
+            val formattedTime = DateTimeFormatter
+                .ofPattern("dd-MM-yyyy, hh:mm:ss")
+                .format(LocalDateTime.now())
+
+            logs + WebSocketLog(
+                formattedTime = formattedTime,
+                log = newLog
+            )
+        }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5000L),
+            emptyList()
+        )
+
+    fun sendMessage(text: String) {
+        viewModelScope.launch {
+            client.sendMessage(text)
+        }
+    }
+}
+```
+
+## **flatMapConcat / flatMapMerge / flatMapLatest**
+
+이 강의에서는 **Kotlin Flow**에서 사용되는 세 가지 **`flatMap` 연산자**인 **`flatMapConcat`**, **`flatMapMerge`**, 그리고 `flatMapLatest`에 대해 설명하고, 각 연산자의 차이점과 그에 따른 사용 사례를 다룹니다. 이들은 모두 **Flow** 내에서 **한 Flow를 다른 Flow로 변환**할 때 사용되지만, 각 연산자의 동작 방식이 다릅니다.
+
+### 1. **`flatMapConcat`**
+
+- **순차적 처리**: `flatMapConcat`은 **순차적으로** 데이터를 처리합니다. 즉, 한 Flow에서 값을 방출할 때, 그 값이 변환된 Flow가 모두 처리될 때까지 기다린 후 다음 값을 처리합니다.
+- **한 번에 하나의 Flow만 처리**: 이전 Flow의 모든 데이터 방출이 완료될 때까지 대기한 후에 다음 Flow의 처리를 시작합니다.
+
+### 예시:
+
+```kotlin
+flowOf(1, 2, 3)
+    .flatMapConcat { value ->
+        flow {
+            emit("$value-A")
+            delay(100)
+            emit("$value-B")
+        }
+    }
+```
+
+- 결과는 순차적으로: `1-A`, `1-B`, `2-A`, `2-B`, `3-A`, `3-B` 순서로 방출됩니다.
+- **순차 처리**가 필요한 상황에 적합합니다.
+
+### 2. **`flatMapMerge`**
+
+- **병렬 처리**: `flatMapMerge`는 **동시에 여러 Flow를 처리**할 수 있습니다. 각각의 Flow는 **독립적인 코루틴**에서 실행되며, 여러 Flow가 병렬로 처리됩니다.
+- **성능 향상**: Flow를 병렬로 처리하므로 **성능을 극대화**할 수 있지만, 순차적인 순서는 보장되지 않습니다.
+
+### 예시:
+
+```kotlin
+flowOf(1, 2, 3)
+    .flatMapMerge { value ->
+        flow {
+            emit("$value-A")
+            delay(100)
+            emit("$value-B")
+        }
+    }
+```
+
+- 결과는: `1-A`, `2-A`, `3-A`, `1-B`, `2-B`, `3-B`로 병렬로 방출됩니다.
+- 병렬 처리가 필요할 때 적합하며, 여러 작업을 동시에 처리하고 싶을 때 사용됩니다.
+
+### 3. **`flatMapLatest`**
+
+- **최신 값만 처리**: `flatMapLatest`는 새로운 값이 들어오면 **이전 값에 대한 처리를 중단**하고, 최신 값에 대한 Flow만을 처리합니다.
+- **실시간 데이터 처리**: 주로 **UI 상태**를 처리할 때 유용하며, **가장 최신 데이터**만을 사용하는 상황에서 적합합니다.
+
+### 예시:
+
+```kotlin
+flowOf(1, 2, 3)
+    .flatMapLatest { value ->
+        flow {
+            emit("$value-A")
+            delay(100)
+            emit("$value-B")
+        }
+    }
+```
+
+- 결과는: `1-A`, `2-A`, `3-A`, `3-B`로 방출됩니다. 여기서 **1-B**와 **2-B**는 중단되고 처리되지 않습니다.
+- UI 상태에서 **가장 최신 상태만** 반영하고 싶을 때 적합합니다.
+
+### 비교 요약
+
+| 연산자 | 동작 방식 | 특징 | 사용 사례 |
+| --- | --- | --- | --- |
+| **`flatMapConcat`** | **순차적 처리** | 하나의 Flow가 완료되면 다음 Flow 처리 | 순차적인 데이터 처리 필요 시 사용 |
+| **`flatMapMerge`** | **병렬 처리** | 여러 Flow를 동시에 처리하고 순서는 보장되지 않음 | 병렬 작업 처리나 성능 최적화가 필요할 때 |
+| **`flatMapLatest`** | **최신 값만 처리** | 이전 값 처리 중단, 최신 값만 처리 | 실시간 데이터나 UI 상태 최신화가 필요할 때 |
+
+### 사용 시 고려 사항
+
+- **`flatMapConcat`**: **순차적으로 처리**해야 하는 상황에서 사용합니다. 예를 들어, 데이터의 순서가 중요할 때 유용합니다.
+- **`flatMapMerge`**: **병렬로 처리**할 수 있는 상황에서, 성능을 극대화하고 싶을 때 사용합니다. 여러 네트워크 요청이나 병렬로 처리할 수 있는 작업에서 유용합니다.
+- **`flatMapLatest`**: UI와 같이 **최신 상태**만을 필요로 하는 경우에 사용되며, 이전 작업이 완료되지 않아도 **최신 값을 빠르게 처리**할 수 있습니다.
+
+## **Handling Backpressure**
+
+**Kotlin Flow**에서 **Backpressure**를 처리하는 방법에 대해 설명하고, 다양한 연산자를 사용하여 **생산자(Producer)**가 **소비자(Collector)**보다 빠르게 데이터를 방출할 때 발생하는 문제를 해결하는 방법을 다룹니다. **Backpressure**는 생산자가 데이터를 너무 빠르게 방출하여 소비자가 이를 처리할 시간이 부족할 때 발생합니다. 이를 해결하기 위해 **Buffer**, **Conflate**, 그리고 **CollectLatest** 연산자들이 사용됩니다.
+
+### 주요 내용
+
+1. **Backpressure란?**
+    - **Backpressure**는 생산자가 소비자보다 더 빠르게 데이터를 방출할 때 발생하는 문제입니다.
+    - 소비자는 생산자가 방출한 데이터를 순차적으로 처리하지만, 만약 소비자가 데이터를 처리하는 시간이 오래 걸리면, 생산자는 대기하게 됩니다.
+    - 예를 들어, 생산자가 500밀리초 간격으로 데이터를 방출하고 소비자가 1초에 걸쳐 데이터를 처리하는 상황에서는, 데이터가 점점 밀리게 됩니다.
+2. **Buffer 연산자**:
+    - **Buffer**는 생산자가 빠르게 데이터를 방출하더라도, 데이터를 **버퍼(메모리)**에 저장해 소비자가 천천히 처리할 수 있도록 도와줍니다.
+    - 버퍼에 저장된 데이터를 차례로 처리하며, 소비자는 데이터를 처리하는 동안에도 생산자는 계속 데이터를 방출할 수 있습니다.
+    
+    ```kotlin
+    flowOf(1, 2, 3)
+        .buffer()
+        .collect { value ->
+            delay(1000)  // 데이터를 처리하는 데 시간이 걸림
+            println("Processed $value")
+        }
+    ```
+    
+    - 하지만 버퍼의 크기가 너무 커지면 메모리 부족 문제가 발생할 수 있습니다. 따라서 **버퍼 크기를 설정**하여 메모리 오버플로를 방지해야 합니다.
+3. **Conflate 연산자**:
+    - **Conflate**는 소비자가 데이터를 처리하는 동안 **이전 값을 건너뛰고** 최신 값만 처리합니다.
+    - 즉, 중간 값들은 건너뛰며, 소비자가 이전 데이터를 처리하고 있는 동안 최신 데이터를 받을 수 있습니다.
+    
+    ```kotlin
+    flowOf(1, 2, 3)
+        .conflate()
+        .collect { value ->
+            delay(1000)
+            println("Processed $value")
+        }
+    ```
+    
+    - 이 방식은 **일부 데이터의 손실을 허용**할 수 있는 경우 유용합니다. 예를 들어, UI 상태 업데이트에서는 **최신 상태**만 중요하기 때문에, 중간 값을 건너뛰는 것이 가능합니다.
+4. **CollectLatest 연산자**:
+    - **CollectLatest**는 소비자가 현재 처리 중인 작업을 **취소**하고, 최신 데이터로 작업을 다시 시작합니다.
+    - 즉, 새로운 데이터가 들어오면 **이전 작업을 중단**하고 최신 데이터를 처리하는 방식입니다.
+    
+    ```kotlin
+    flowOf(1, 2, 3)
+        .collectLatest { value ->
+            delay(1000)
+            println("Processed $value")
+        }
+    
+    ```
+    
+    - **CollectLatest**는 **UI 업데이트**와 같은 상황에서 유용합니다. 예를 들어, UI가 자주 업데이트될 때, 이전 상태는 더 이상 중요하지 않기 때문에 최신 상태만 반영하면 됩니다.
+
+### 연산자 비교
+
+| 연산자 | 설명 | 사용 예시 |
+| --- | --- | --- |
+| **Buffer** | 데이터를 **메모리에 저장**하여 천천히 처리할 수 있도록 함 | 모든 데이터를 저장하고 처리해야 할 때 |
+| **Conflate** | 이전 데이터를 **건너뛰고**, 최신 데이터만 처리 | 최신 상태만 중요한 경우 (예: UI 상태) |
+| **CollectLatest** | 이전 작업을 **취소**하고, 최신 데이터를 즉시 처리 | 이전 데이터를 중단하고 최신 데이터만 처리 |
+
+---
+
+### 추가) Conflate와 CollectLatest는 그럼 같은 기능이 아닌가요?
+
+**Conflate**와 **CollectLatest**는 **유사한 목적**을 가지고 있지만, **동작 방식**에 차이가 있습니다. 두 연산자 모두 **이전 데이터를 무시하고 최신 데이터만 처리**하는 방식으로 **Backpressure** 문제를 해결하려는 공통점을 갖고 있지만, **어떻게 처리하느냐**에 있어 차이가 있습니다.
+
+### 1. **Conflate**
+
+- **Conflate**는 **중간 데이터를 건너뛰고 최신 데이터만 처리**합니다.
+- **생산자(Producer)** 가 값을 방출할 때, 소비자가 처리 중인 경우 **다음 값**을 받을 때까지 기다리지 않고, 중간 값을 건너뛰고 **마지막 값**만 처리합니다.
+- **이전 값을 취소하지 않고**, 그 값이 완료될 때까지 처리한 후 **최신 값**을 수집합니다. 즉, 중간에 값을 버리되, **현재 처리 중인 작업은 중단되지 않습니다**.
+
+### 동작 방식:
+
+```kotlin
+flowOf(1, 2, 3)
+    .conflate()
+    .collect { value ->
+        delay(1000)
+        println("Processed $value")
+    }
+```
+
+- 이 코드는 생산자가 빠르게 값을 방출할 때, 중간 값은 건너뛰고 **가장 최신 값만 처리**합니다.
+- **처리 결과**는 "Processed 1", "Processed 3"처럼 중간 값 **2**는 **건너뛰지만**, 이미 시작된 **1**의 처리는 중단되지 않고 완료됩니다.
+
+### 2. **CollectLatest**
+
+- **CollectLatest**는 **최신 데이터만 처리**하는 동시에, **이전 작업을 취소**하는 특징이 있습니다.
+- **새로운 값**이 방출될 때마다, **현재 진행 중인 작업을 중단**하고 **가장 최신 값**만 처리합니다.
+- 즉, 이전 데이터에 대한 작업을 **즉시 취소**하고, 새로운 데이터에 대한 작업을 **재시작**합니다.
+
+### 동작 방식:
+
+```kotlin
+flowOf(1, 2, 3)
+    .collectLatest { value ->
+        delay(1000)
+        println("Processed $value")
+    }
+```
+
+- 이 코드는 생산자가 빠르게 값을 방출할 때, **이전 값의 처리 도중** 새로운 값이 방출되면 **이전 값의 작업을 중단**하고 **새로운 값에 대한 작업을 시작**합니다.
+- **처리 결과**는 "Processed 3"만 출력됩니다. 왜냐하면 **1**과 **2**는 각각의 처리 중에 **3**이 방출되면서 **작업이 취소**되었기 때문입니다.
+
+### 차이점 요약
+
+| **특징** | **Conflate** | **CollectLatest** |
+| --- | --- | --- |
+| **이전 값 처리** | 이전 값을 **완료할 때까지 처리**, 중간 값을 건너뜀 | **이전 값을 처리 중단**, 최신 값만 처리 |
+| **작업 중단** | **현재 작업은 중단되지 않음**, 중간 값은 무시 | **현재 작업을 즉시 취소**하고, 최신 값으로 재시작 |
+| **사용 사례** | 중간 데이터 손실을 허용하되, 이미 시작된 작업은 중단하지 않아야 할 때 | **UI 상태**나 **네트워크 호출**처럼 **최신 데이터만 중요한 경우** |
+
+### 결론
+
+- **Conflate**는 중간 값을 무시하면서 **현재 처리 중인 작업을 완료**하지만, **CollectLatest**는 **진행 중인 작업을 취소**하고 **최신 값으로 재시작**합니다.
+- **CollectLatest**는 최신 데이터가 중요한 상황, 예를 들어 **실시간 UI 상태 관리**에서 자주 사용되고, **Conflate**는 **이전 데이터의 처리가 반드시 완료되어야 하는 경우**에 사용됩니다.
+
+## 연산자
+
+### coercein
+
+**Kotlin**에서 제공하는 함수로, 주어진 값이 특정 **범위** 안에 있도록 값을 제한하는 역할을 합니다. 값이 범위 밖에 있으면, 범위의 **최소값 또는 최대값**으로 값을 제한합니다.
+
+즉, **최소값보다 작으면 최소값을 반환**하고, **최대값보다 크면 최대값을 반환**하며, **범위 내에 있으면 원래 값을 반환**합니다.
+
+```kotlin
+fun coerceIn(minimumValue: T, maximumValue: T): T
+```
+
+### `coerceIn` 메서드의 동작
+
+- 주어진 값을 `minimumValue`와 **`maximumValue`** 사이의 값으로 제한합니다.
+- 만약 값이 **minimumValue**보다 작으면 minimumValue를 반환하고, 값이 **maximumValue**보다 크면 maximumValue를 반환합니다.
+
+### 사용 예시
+
+1. **숫자 값 제한**:
+    
+    ```kotlin
+    val value = 150
+    val coercedValue = value.coerceIn(0, 100)  // 150은 100보다 크므로 100으로 제한됨
+    println(coercedValue)  // 출력: 100
+    ```
+    
+    - `value`가 150일 때, 최소값 0과 최대값 100 사이로 제한하므로 **100**을 반환합니다.
+2. **범위 내의 값일 때**:
+    
+    ```kotlin
+    val value = 50
+    val coercedValue = value.coerceIn(0, 100)  // 50은 범위 내이므로 그대로 반환됨
+    println(coercedValue)  // 출력: 50
+    ```
+    
+    - `value`가 50일 때, 이 값은 0과 100 사이에 있으므로 **값이 그대로 유지**됩니다.
+3. **진행률 계산**:
+    
+    ```kotlin
+    val progress = 1.2f  // 진행률이 1.0을 넘는 경우
+    val coercedProgress = progress.coerceIn(0f, 1f)  // 1.0으로 제한됨
+    println(coercedProgress)  // 출력: 1.0
+    ```
+    
+    - `progress`가 1.2일 때, 0과 1 사이로 제한하므로 **1.0**으로 반환됩니다.
+
+### `coerceIn`의 활용
+
+1. **UI에서 진행률이나 스크롤 값 제한**:
+    - 진행률(Progress) 계산 시 **0.0**에서 **1.0** 사이로 값을 제한할 때 많이 사용됩니다.
+2. **입력 값 검증**:
+    - 숫자 입력에서 사용자가 지정한 범위를 넘지 않도록 **입력값을 검증**하고 제한할 수 있습니다.
+3. **게임에서 좌표나 속도 제한**:
+    - 게임이나 애니메이션에서 물체의 위치나 속도를 특정 범위 안에 제한할 때 사용할 수 있습니다.
+        
+        ---
+        
+
+### runningReduce
+
+- `runningReduce`는 **Kotlin Flow**의 **중간 연산자(Intermediate Operator)** 중 하나로, Flow에서 방출된 값들을 **누적하여 처리**하고, 각 중간 단계의 누적 결과를 새로운 값으로 방출하는 연산자입니다. 일반적인 `reduce`와 달리, **모든 중간 누적 결과**를 방출하기 때문에 **실시간으로 누적 상태를 추적**할 수 있습니다.
+
+### `runningReduce`의 동작 방식
+
+- **누적 결과를 계산**하면서, **Flow**가 방출할 때마다 중간 결과를 **계속 방출**합니다.
+- 초기값 없이 첫 번째 값부터 누적이 시작되며, 두 번째 값부터 누적된 값을 계산하여 방출합니다.
+
+### `runningReduce`의 시그니처
+
+```kotlin
+fun <S, T : S> Flow<T>.runningReduce(
+    operation: suspend (accumulator: S, value: T) -> S
+): Flow<S>
+```
+
+- `accumulator`는 누적된 값이고, `value`는 Flow에서 방출된 현재 값입니다.
+- 각 방출된 값에 대해 **누적(accumulation) 연산**을 수행하고 그 결과를 방출합니다.
+
+### 사용 예시
+
+1. **숫자 합계 계산**:
+    
+    ```kotlin
+    val flow = flowOf(1, 2, 3, 4)
+    val sumFlow = flow.runningReduce { accumulator, value ->
+        accumulator + value
+    }
+    
+    // 방출 결과: 1, 3, 6, 10 (누적된 중간 값 방출)
+    sumFlow.collect { println(it) }
+    ```
+    
+    - 첫 번째 값 **1**을 그대로 방출하고, 이후에 **1+2=3**, **1+2+3=6**, **1+2+3+4=10**을 방출합니다.
+2. **실시간 진행 상태 관리**:
+예를 들어, 타이머나 작업의 진행 상태를 추적할 때, 누적된 시간을 계속해서 추적할 수 있습니다.
+    
+    ```kotlin
+    val elapsedTimeFlow = timerFlow.runningReduce { accumulator, elapsedTime ->
+        accumulator + elapsedTime  // 누적된 시간을 계산
+    }
+    ```
+    
+    - 여기서 `elapsedTimeFlow`는 각 방출된 시간을 누적하여 **경과 시간**을 계속해서 방출합니다.
+
+### `runningReduce` vs `reduce`
+
+- `reduce`는 **최종 누적 값**만을 반환하고 중간 결과는 방출하지 않습니다.
+    
+    ```kotlin
+    kotlin
+    코드 복사
+    val flow = flowOf(1, 2, 3, 4)
+    val sum = flow.reduce { accumulator, value ->
+        accumulator + value
+    }
+    // 방출 결과: 10 (최종 값만 반환)
+    ```
+    
+- `runningReduce`는 중간에 누적된 값도 **모든 단계에서 방출**하므로, 실시간으로 누적 상태를 추적하는 작업에 유용합니다.
+
+### 사용 사례
+
+1. **실시간 데이터의 누적 상태를 추적**: 예를 들어, 사용자의 위치 데이터를 수집하면서 **누적된 이동 거리**를 계산하거나, **타이머에서 경과 시간**을 누적하여 UI에 표시할 수 있습니다.
+2. **누적된 합계**나 **통계 정보**를 실시간으로 업데이트할 때 유용합니다. 예를 들어, 점진적인 데이터 처리를 통해 **누적 평균**을 계산할 수 있습니다.
+
+### runningFold vs scan
+
+- `runningFold`와 **`scan`** 연산자는 모두 Kotlin Flow에서 **중간 값을 누적**하면서 **각 단계의 결과를 방출**하는 연산자입니다. `runningReduce`와 유사하지만, 두 연산자는 초기값을 제공하고 **누적 과정**에서 좀 더 다양한 사용 사례에 활용됩니다.
+
+### 1. **`runningFold`**
+
+- `runningFold`는 **누적 연산을 수행**하면서, Flow에서 방출된 각 값에 대해 **누적 결과를 중간마다 방출**하는 연산자입니다. **초기값**을 설정할 수 있다는 점에서 `runningReduce`와 차이가 있습니다.
+
+### 사용 예시
+
+```kotlin
+val flow = flowOf(1, 2, 3, 4)
+val foldedFlow = flow.runningFold(0) { accumulator, value ->
+    accumulator + value
+}
+
+// 방출된 값: 0, 1, 3, 6, 10 (초기값 포함)
+foldedFlow.collect { println(it) }
+```
+
+- 초기값 **0**을 설정하고, 그 값부터 시작하여 누적된 합계를 방출합니다.
+    - **0** → **0 + 1 = 1** → **1 + 2 = 3** → **3 + 3 = 6** → **6 + 4 = 10**
+
+### 동작 방식
+
+- **초기값**을 설정하고, 그 값부터 시작하여 Flow에서 방출된 값을 누적하면서 **각 단계에서 누적된 중간 결과를 방출**합니다.
+- `runningFold`는 `reduce`와 달리 **초기값을 지정할 수 있으며**, 결과를 **각 단계마다 방출**합니다.
+
+### 사용 사례
+
+- 누적 결과를 실시간으로 추적하거나, **초기값**이 중요한 계산에서 사용할 수 있습니다. 예를 들어, 타이머를 시작할 때 누적된 시간에 10초를 추가해야 할 경우 초기값으로 10을 설정할 수 있습니다.
+
+---
+
+### 2. **`scan`**
+
+- `scan`은 `runningFold`와 거의 동일한 동작을 하지만, 이는 **Reactor**나 **RxJava**와 같은 **반응형 프로그래밍** 라이브러리에서 익숙한 이름입니다. **초기값**을 받아서 누적 연산을 수행하며, **각 중간 단계에서 누적된 값**을 방출합니다.
+
+### 사용 예시
+
+```kotlin
+val flow = flowOf(1, 2, 3, 4)
+val scannedFlow = flow.scan(0) { accumulator, value ->
+    accumulator + value
+}
+
+// 방출된 값: 0, 1, 3, 6, 10 (초기값 포함)
+scannedFlow.collect { println(it) }
+```
+
+- `scan`은 `runningFold`와 동일한 방식으로 동작하며, **초기값**부터 시작해서 각 방출된 값을 누적하고 중간마다 그 값을 방출합니다.
+
+### `scan`의 동작
+
+- **초기값**을 설정하고 Flow의 값들을 누적하면서 **중간 결과를 방출**합니다. `runningFold`와 기능적으로 동일하지만, `scan`은 **리액티브 프로그래밍**에서 사용되는 연산자 이름입니다.
+
+---
+
+### 3. **`runningFold` vs `scan`**
+
+- **동작 방식**: 두 연산자는 **초기값**부터 시작해서 Flow에서 방출된 값을 누적하여 **중간 결과를 방출**하는 점에서 동일합니다.
+- **차이점**: Kotlin에서는 `runningFold`가 더 일반적으로 사용되며, `scan`은 다른 리액티브 프로그래밍 라이브러리에서 자주 사용하는 이름입니다.
+- **실제 사용**: Kotlin Flow에서는 `runningFold`를 더 자주 사용하지만, `scan`도 완전히 동일한 동작을 제공하며 **리액티브 프로그래밍**을 알고 있다면 자연스럽게 이해할 수 있습니다.
+
+---
+
+### 요약
+
+| 연산자 | 특징 | 사용 예시 |
+| --- | --- | --- |
+| **`runningFold`** | 초기값을 받아서 각 단계마다 누적된 중간 결과를 방출하는 연산자. 초기값을 지정할 수 있음. | 초기값 0으로 누적 합계 계산: 0, 1, 3, 6, 10 |
+| **`scan`** | `runningFold`와 동일하게 동작하며, 리액티브 프로그래밍에서 익숙한 이름. | 초기값을 받아 누적된 중간 값을 방출. (기능적으로 동일) |
+
+두 연산자는 모두 **중간 값을 누적**하여 계산하며, **초기값**을 포함하여 실시간으로 누적된 중간 값을 계산하고 방출해야 하는 작업에서 유용하게 사용할 수 있습니다.
+
+</div>
+</details>
