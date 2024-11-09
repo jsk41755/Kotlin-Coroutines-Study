@@ -2272,3 +2272,148 @@ scannedFlow.collect { println(it) }
 
 </div>
 </details>
+
+<details>
+<summary>Testing Coroutines & Flows</summary>
+<div markdown="1">
+
+## **Testing Suspending Functions**
+
+**Coroutine과 Flow**는 비동기적으로 실행되기 때문에 **결과를 예측하기 어려운 경우**가 생길 수 있으며, 이는 테스트의 **결과 신뢰성**에 영향을 미칩니다. 이를 해결하기 위해 **runBlocking**, **runTest**와 같은 테스트 도구와 **테스트용 디스패처**를 사용하는 방법이 소개됩니다.
+
+### 주요 내용
+
+1. **suspend 함수의 기본 테스트 방법**:
+    - 일반적으로 **suspend 함수**를 테스트할 때는 `runBlocking`을 사용해 해당 함수가 실행될 수 있는 코루틴 컨텍스트를 제공합니다.
+    - `runBlocking`은 테스트가 **블로킹 모드**로 실행되도록 하여, 모든 코루틴이 **순차적으로 실행**되도록 합니다. 이는 테스트의 **결과를 안정적**으로 만들어 주기 때문에 유용합니다.
+    
+    ```kotlin
+    @Test
+    fun testFibonacci() = runBlocking {
+        val result = fibonacci(30)
+        assertThat(result).isEqualTo(832_040)
+    }
+    ```
+    
+    - `runBlocking`을 사용하면 코루틴의 비동기 작업을 순차적으로 처리하게 되어, 테스트 중 **결과 예측이 가능**해집니다.
+    
+    ### `runBlocking`의 단점
+    
+    1. **메인 스레드를 블로킹**:
+        - `runBlocking`은 **메인 스레드에서 코루틴을 블로킹**합니다. 일반적으로 **비동기 작업을 동기화**해서 순차적으로 처리할 때는 유용하지만, 실제 앱에서는 메인 스레드를 차단하면 **UI 응답성**에 영향을 줄 수 있습니다.
+        - UI 관련 작업에서 **메인 스레드가 차단되면** 앱이 멈추거나 느려질 수 있습니다. 테스트 환경에서는 큰 문제는 아니지만, 이로 인해 앱의 실제 성능을 반영하지 못할 수 있습니다.
+    2. **비동기 코드의 특징을 제대로 반영하지 않음**:
+        - `runBlocking`은 **비동기 코드를 동기식처럼 실행**하기 때문에, 실제 비동기 동작에서 발생할 수 있는 문제(예: race condition)를 놓칠 수 있습니다. 이는 **코드가 실제 상황과 다르게 동작할 가능성**을 의미합니다.
+        - 따라서, **비동기성**을 유지하면서 테스트를 진행하고자 할 때는 적합하지 않습니다.
+
+---
+
+1. **runTest를 활용한 테스트 최적화**:
+    - `runTest`는 **테스트에만 사용되는 특별한 디스패처**를 활용해, **지연(delay)을 무시**하고 **비동기 작업을 빠르게 처리**할 수 있도록 합니다.
+    - `delay`가 포함된 suspend 함수가 있을 경우, **runTest**를 사용해 테스트 시 실제 지연이 발생하지 않도록 할 수 있습니다.
+    
+    ```kotlin
+    @Test
+    fun testFibonacciWithRunTest() = runTest {
+        val result = fibonacci(30)
+        assertThat(result).isEqualTo(832_040)
+    }
+    ```
+    
+    - **runTest**는 테스트 속도를 개선하며, **실제 지연 시간 없이 빠르게 테스트를 수행**할 수 있습니다.
+    
+    ### `runTest`의 단점
+    
+    1. **테스트의 시간 왜곡**:
+        - *`runTest`*는 **가상 시간**을 사용하여 테스트 내에서 지연을 무시하고 빠르게 실행할 수 있게 합니다. 하지만 이는 **실제 시간과 다르게 동작**하여 가상 시간과 실제 실행 시간 간의 차이를 유발할 수 있습니다.
+        - **시간 의존성이 높은 테스트**에서는 **실제 환경과 다른 결과**가 나올 수 있으며, 이는 현실적인 테스트가 어려워질 수 있습니다.
+    2. **제한적인 API 지원**:
+        - *`runTest`*는 일부 API에서 제대로 작동하지 않을 수 있습니다. 예를 들어, **네트워크 요청**, **파일 I/O** 등의 작업은 가상 시간이 아닌 실제 시간을 요구하기 때문에 **`runTest`*로는 효과적으로 테스트할 수 없습니다.
+        - *`delay`*와 같은 단순한 지연을 제거하는 데는 유용하지만, **복잡한 비동기 작업**에서는 한계가 있을 수 있습니다.
+    3. **지연 시간의 정확성 보장 어려움**:
+        - *`runTest`*는 가상 시간을 이용하여 테스트 시간을 단축시키지만, 복잡한 비동기 로직에서는 가상 시간과 실제 시간의 불일치가 발생할 수 있습니다.
+        - 특히, 여러 비동기 작업이 중첩된 경우 가상 시간의 관리가 어려워질 수 있습니다.
+2. **디스패처 주입을 통한 테스트 최적화**:
+    - 코루틴에서 **디스패처를 명시적으로 지정**하는 것이 테스트에서는 중요합니다. 예를 들어, 기본 디스패처가 아닌 **테스트 디스패처**를 사용하면 **지연을 무시하고 빠르게 실행**할 수 있습니다.
+    - 함수에서 **Dispatcher**를 외부에서 주입받도록 설계하면, 프로덕션 코드에서는 **기본 디스패처**를 사용하고, 테스트 코드에서는 **테스트 디스패처**를 사용할 수 있습니다.
+    
+    ```kotlin
+    suspend fun fibonacci(n: Int, dispatcher: CoroutineDispatcher): Int =
+        withContext(dispatcher) {
+            // Fibonacci logic
+        }
+    ```
+    
+3. **테스트 디스패처와 race condition 방지**:
+    - **멀티스레드 환경에서 발생할 수 있는 race condition**을 방지하기 위해 **단일 스레드**에서 코루틴을 실행하는 것이 중요합니다.
+    - **runBlocking**이나 **runTest**를 통해 **코루틴을 단일 스레드에서 순차적으로 실행**하여, **테스트 결과의 일관성**을 확보할 수 있습니다.
+4. **테스트 중 느린 작업 최적화**:
+    - 예를 들어, 네트워크 호출이나 대기 시간이 긴 연산을 포함한 함수는 **runTest**를 통해 지연 시간을 무시하고 빠르게 실행할 수 있습니다. 이를 통해 **테스트 수행 속도**를 높이고 **반복 테스트**를 용이하게 만듭니다.
+
+## **Testing Code That Launches Coroutines**
+
+특히, **코루틴 디스패처**와 **테스트 디스패처**를 활용하여, 코루틴 실행 제어 및 일관성 있는 테스트 환경을 만드는 방법을 다룹니다.
+
+### 주요 내용
+
+1. **ViewModel의 `isLoading` 상태 테스트**:
+    - 강의에서는 ViewModel 내에서 **`isLoading`** 상태를 사용하여 **로딩 중 여부를 나타내는 예제**를 설정합니다. `isLoading`이 **true**에서 **false**로 잘 전환되는지 확인하기 위해 테스트가 필요합니다.
+    - 이를 위해 `runTest`로 코루틴을 실행하고, `isLoading` 상태가 적절하게 업데이트되는지 **assert**를 사용해 검증합니다.
+2. **Main Dispatcher 설정 문제**:
+    - **ViewModelScope**에서 실행되는 코루틴은 **Main Dispatcher**에 의존합니다. 하지만 **로컬 단위 테스트** 환경에서는 Main Dispatcher를 찾을 수 없어 테스트가 실패할 수 있습니다.
+    - 이를 해결하기 위해 **테스트 환경에서 Main Dispatcher를 설정**합니다. `Dispatchers.setMain`을 통해 테스트 디스패처를 설정하고, 테스트가 끝난 후에는 이를 `Dispatchers.resetMain`으로 초기화합니다.
+3. **Test Dispatcher 사용**:
+    - 테스트 시 **표준 Test Dispatcher**나 **Unconfined Test Dispatcher**를 사용하여 테스트 디스패처를 설정하고, 코루틴 실행을 제어합니다.
+    - **Standard Test Dispatcher**는 **실제 코루틴 실행을 멈춘 상태에서** 테스트 실행을 시작하고, `runCurrent`를 호출해 특정 시점에 코루틴이 실행되도록 합니다. 이를 통해 중간 상태를 검증할 수 있습니다.
+    - **Unconfined Test Dispatcher**는 모든 코루틴을 즉시 실행하므로, `runCurrent` 호출 없이도 테스트가 가능하며 빠른 테스트를 원하는 경우 적합합니다.
+4. **코루틴 제어**: `runCurrent`, `advanceUntilIdle`, `advanceTimeBy` 3가지 방법 중 활용
+    - **`runCurrent`**: 실행되지 않은 코루틴을 즉시 실행하여 특정 시점의 상태를 검증합니다.
+    - **`advanceUntilIdle`**: **모든 대기 중인 작업**이 완료될 때까지 코루틴을 실행합니다. 코루틴이 완전히 종료된 상태에서 결과를 확인할 때 유용합니다.
+    - **`advanceTimeBy`**: 특정 시간만큼 가상 시간을 이동해 **지연 작업을 통제**할 수 있습니다. 예를 들어, `advanceTimeBy(3000)`을 사용하면 3초 지연을 건너뛸 수 있습니다.
+5. **DispatcherProvider 패턴 도입**:
+    - **DispatcherProvider** 인터페이스를 사용해 **디스패처를 주입**함으로써, 테스트 환경에서 **모든 디스패처를 Test Dispatcher로 설정**할 수 있습니다.
+    - 이를 통해 ViewModel 내부에서 **IO, Default, Main 디스패처를 명시적으로 지정**하고, 테스트 시 **모든 디스패처가 일관된 테스트 디스패처**를 사용하게 합니다.
+6. **Junit Rule을 활용한 Main Dispatcher 설정 자동화**:
+    - Junit의 **Rule**을 사용하여 **Main Dispatcher를 자동으로 설정하고 초기화**할 수 있습니다. 이를 통해 코드 중복을 줄이고, 모든 테스트 케이스에서 **일관된 테스트 디스패처**가 적용되도록 설정합니다.
+
+## **Testing Flows**
+
+이 강의에서는 **Kotlin Flow**를 테스트할 때 **Turbine** 라이브러리를 사용하여 여러 방출 값을 처리하는 방법과, `StateFlow`와 같은 **여러 상태의 방출을 확인**하는 방법을 설명합니다. `Turbine`은 **Flow 테스트를 단순화하고 직관적으로** 만드는 라이브러리로, **Flow의 다양한 방출 값을 쉽게 확인**할 수 있도록 도와줍니다.
+
+### 주요 내용
+
+1. **Flow 테스트의 필요성**:
+    - 일반적인 **suspend 함수** 테스트와 달리, Flow는 **여러 값이 시간에 따라 방출**될 수 있기 때문에, **모든 방출 값을 확인**할 수 있는 방법이 필요합니다.
+    - 단순히 특정 순간의 값만 검증하는 것이 아닌, **시간에 걸쳐 발생하는 모든 방출 값을 순차적으로 테스트**할 수 있어야 합니다.
+2. **Turbine 라이브러리**:
+    - **Turbine**은 Flow의 방출 값을 쉽게 검증할 수 있는 라이브러리로, **비동기 데이터 방출**을 기다리고 **각 방출 값에 대해 검증**할 수 있습니다.
+    - `awaitItem` 함수를 사용하여 Flow에서 **다음 방출 값을 기다린 후 값 확인**이 가능하며, `cancelAndConsumeRemainingEvents`로 나머지 방출을 소모하고 테스트를 종료할 수 있습니다.
+3. **StateFlow 테스트 예제**:
+    - `isLoading` 상태가 변경되는 Flow를 Turbine으로 테스트하여 **각 방출 값이 예상대로 전환되는지 확인**합니다.
+    - 예시:
+        
+        ```kotlin
+        @Test
+        fun testRegisterLoading() = runTest {
+            val initialEmission = viewModel.isLoading.test {
+                assertEquals(false, awaitItem())  // 초기값 false 검증
+                viewModel.register()
+                assertEquals(true, awaitItem())   // register 후 true로 전환 검증
+                assertEquals(false, awaitItem())  // 완료 후 다시 false로 전환 검증
+            }
+        }
+        ```
+        
+    - Turbine은 Flow의 각 방출 값을 `awaitItem`으로 기다리며, **비동기 작업이 완료될 때까지 suspend**되고, Turbine 자체가 지연을 관리하므로 추가적인 `runCurrent` 호출이 필요 없습니다.
+4. **복잡한 상태 변화의 테스트**:
+    - Turbine은 Flow가 방출하는 여러 상태를 연속적으로 테스트할 수 있어, Flow의 다양한 상태 전환과 이에 따른 **상태 변화 테스트**에 유용합니다.
+    - `awaitItem`을 통해 각 상태를 개별적으로 검증하며, 예기치 않은 방출이 발생할 경우 **타임아웃으로 테스트가 실패**하게 됩니다.
+5. **여러 Flow 및 Turbine의 활용**:
+    - 복잡한 연산을 통해 결합된 Flow를 테스트할 때도 Turbine을 활용하여 **여러 Flow가 결합된 상태에서 발생하는 각 방출을 검증**할 수 있습니다.
+    - 예를 들어, **이메일과 비밀번호의 유효성 검증 상태**를 Flow로 결합한 뒤, Turbine을 사용해 각각의 유효성 검증 결과가 기대대로 방출되는지 테스트할 수 있습니다.
+6. **에러 핸들링**:
+    - 무한 방출이 발생하는 Flow의 경우, `cancelAndConsumeRemainingEvents`를 사용하여 **남은 방출을 모두 소모**하고 테스트를 종료할 수 있습니다.
+    - 이 기능은 **무한 반복되는 방출을 가진 Flow 테스트에서 유용**하며, 불필요한 방출로 인해 테스트가 멈추지 않도록 방지합니다.
+  
+</div>
+</details>
